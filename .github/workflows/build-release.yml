@@ -13,9 +13,18 @@ on:
       release_tag:
         description: "Release tag name (e.g., v1.1.3-unguarded)"
         required: true
+      bun_version:
+        description: "Bun version to build with (must match the upstream tag's packageManager field for older versions)"
+        required: false
+        default: "latest"
+      include_desktop:
+        description: "Also build the Electron desktop app (only for upstream versions that ship one)"
+        required: false
+        default: true
+        type: boolean
 
 env:
-  BUN_VERSION: "latest"
+  BUN_VERSION: ${{ inputs.bun_version || 'latest' }}
 
 jobs:
   fetch-version:
@@ -407,6 +416,7 @@ jobs:
   # replaces the obsolete Tauri pipeline; every matrix entry is required.
   build-desktop:
     needs: fetch-version
+    if: ${{ inputs.include_desktop != false }}
     strategy:
       fail-fast: false
       matrix:
@@ -573,7 +583,7 @@ jobs:
 
   release:
     needs: [fetch-version, build-linux, build-macos, build-windows, build-desktop]
-    if: always() && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && needs.build-desktop.result == 'success'
+    if: always() && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && (needs.build-desktop.result == 'success' || needs.build-desktop.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -652,7 +662,9 @@ jobs:
             done
           done
 
-          bun script/merge-electron-updater-yml.ts artifacts release "${{ needs.fetch-version.outputs.version }}"
+          if [ "${{ inputs.include_desktop }}" != "false" ]; then
+            bun script/merge-electron-updater-yml.ts artifacts release "${{ needs.fetch-version.outputs.version }}"
+          fi
 
           required=(
             opencode-linux-x64
@@ -662,11 +674,15 @@ jobs:
             opencode-darwin-arm64
             opencode-darwin-x64
             opencode-windows-x64.exe
-            latest.yml
-            latest-mac.yml
-            latest-linux.yml
-            latest-linux-arm64.yml
           )
+          if [ "${{ inputs.include_desktop }}" != "false" ]; then
+            required+=(
+              latest.yml
+              latest-mac.yml
+              latest-linux.yml
+              latest-linux-arm64.yml
+            )
+          fi
           missing=0
           for file in "${required[@]}"; do
             if [ ! -s "release/$file" ]; then
@@ -678,12 +694,14 @@ jobs:
             exit 1
           fi
 
-          for glob in "*.dmg" "*.zip" "*.exe" "*.AppImage" "*.deb"; do
-            if ! compgen -G "release/$glob" >/dev/null; then
-              echo "::error::Required Electron release file matching $glob is missing"
-              exit 1
-            fi
-          done
+          if [ "${{ inputs.include_desktop }}" != "false" ]; then
+            for glob in "*.dmg" "*.zip" "*.exe" "*.AppImage" "*.deb"; do
+              if ! compgen -G "release/$glob" >/dev/null; then
+                echo "::error::Required Electron release file matching $glob is missing"
+                exit 1
+              fi
+            done
+          fi
 
           chmod +x release/opencode-* 2>/dev/null || true
           echo ""
